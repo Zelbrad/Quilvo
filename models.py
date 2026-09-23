@@ -1,4 +1,4 @@
-"""Find the local AI models Flow can use, wherever they're installed.
+"""Find the local AI models Quilvo can use, wherever they're installed.
 
   Speech-to-text  faster-whisper models in the Hugging Face cache (plus any
                   CTranslate2 model folder the user browsed to)
@@ -185,3 +185,46 @@ def cleanup(model_id, system, text, keep_alive="30m"):
         }, timeout=60)
         return r.json()["choices"][0]["message"]["content"].strip()
     raise ValueError(f"unknown provider {provider!r}")
+
+
+# Whisper's languages, by the English name people will look for.
+LANGUAGE_NAMES = {
+    "af": "Afrikaans", "am": "Amharic", "ar": "Arabic", "as": "Assamese", "az": "Azerbaijani",
+    "ba": "Bashkir", "be": "Belarusian", "bg": "Bulgarian", "bn": "Bengali", "bo": "Tibetan",
+    "br": "Breton", "bs": "Bosnian", "ca": "Catalan", "cs": "Czech", "cy": "Welsh",
+    "da": "Danish", "de": "German", "el": "Greek", "en": "English", "es": "Spanish",
+    "et": "Estonian", "eu": "Basque", "fa": "Persian", "fi": "Finnish", "fo": "Faroese",
+    "fr": "French", "gl": "Galician", "gu": "Gujarati", "ha": "Hausa", "haw": "Hawaiian",
+    "he": "Hebrew", "hi": "Hindi", "hr": "Croatian", "ht": "Haitian Creole", "hu": "Hungarian",
+    "hy": "Armenian", "id": "Indonesian", "is": "Icelandic", "it": "Italian", "ja": "Japanese",
+    "jw": "Javanese", "ka": "Georgian", "kk": "Kazakh", "km": "Khmer", "kn": "Kannada",
+    "ko": "Korean", "la": "Latin", "lb": "Luxembourgish", "ln": "Lingala", "lo": "Lao",
+    "lt": "Lithuanian", "lv": "Latvian", "mg": "Malagasy", "mi": "Maori", "mk": "Macedonian",
+    "ml": "Malayalam", "mn": "Mongolian", "mr": "Marathi", "ms": "Malay", "mt": "Maltese",
+    "my": "Burmese", "ne": "Nepali", "nl": "Dutch", "nn": "Norwegian Nynorsk", "no": "Norwegian",
+    "oc": "Occitan", "pa": "Punjabi", "pl": "Polish", "ps": "Pashto", "pt": "Portuguese",
+    "ro": "Romanian", "ru": "Russian", "sa": "Sanskrit", "sd": "Sindhi", "si": "Sinhala",
+    "sk": "Slovak", "sl": "Slovenian", "sn": "Shona", "so": "Somali", "sq": "Albanian",
+    "sr": "Serbian", "su": "Sundanese", "sv": "Swedish", "sw": "Swahili", "ta": "Tamil",
+    "te": "Telugu", "tg": "Tajik", "th": "Thai", "tk": "Turkmen", "tl": "Tagalog",
+    "tr": "Turkish", "tt": "Tatar", "uk": "Ukrainian", "ur": "Urdu", "uz": "Uzbek",
+    "vi": "Vietnamese", "yi": "Yiddish", "yo": "Yoruba", "zh": "Chinese", "yue": "Cantonese",
+}
+
+
+def whisper_languages():
+    """[{id, label}] for every language Whisper supports, sorted by name."""
+    from faster_whisper.tokenizer import _LANGUAGE_CODES
+    return sorted(({"id": c, "label": LANGUAGE_NAMES.get(c, c)} for c in _LANGUAGE_CODES),
+                  key=lambda l: l["label"])
+
+
+def system_language():
+    """The Windows display language as a Whisper code, e.g. 'es', or None."""
+    try:
+        import ctypes, locale
+        name = locale.windows_locale.get(ctypes.windll.kernel32.GetUserDefaultUILanguage(), "")
+        code = name.split("_")[0].lower()
+        return code if code in LANGUAGE_NAMES else None
+    except Exception:
+        return None

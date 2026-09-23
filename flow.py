@@ -9,7 +9,7 @@ Pipeline:  mic -> faster-whisper (STT) -> optional local LLM cleanup -> paste at
 Run:   pyw flow.py   (or double-click Quilvo.bat; the packaged build is Quilvo.exe)
 Stays running in the background, idle until the hotkey is pressed.
 """
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 import os
 os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
@@ -42,12 +42,12 @@ HOTKEY        = "<alt>+<page_down>"     # pynput format
 LLM_MODEL     = "llama3.1:8b"
 KEEP_ALIVE    = "30m"
 WHISPER_MODEL = "small"                 # multilingual STT (English + Spanish); "medium" = more accurate, ~3x slower
-LANGUAGE      = None                    # None = pick from LANGUAGES per take; "en" / "es" to force one
-LANGUAGES     = ("en", "es")            # auto-detect only chooses among these (full auto once heard Russian)
+# Languages are picked in the island and saved in settings.json. Detection only
+# chooses among the picked ones: full auto once heard Spanish/English as Russian.
 # Whisper tends to translate everything into one language when you mix them.
-# A mixed-language prompt primes it to keep each word in the language it was spoken.
-STT_PROMPT    = ("Hola, ¿qué tal? Today I'm working on el proyecto, "
-                 "luego vamos a revisar the code y después hacemos el deploy.")
+# For English + Spanish, a mixed prompt keeps each word in the language it was spoken.
+MIXED_PROMPTS = {frozenset({"en", "es"}): ("Hola, ¿qué tal? Today I'm working on el proyecto, "
+                 "luego vamos a revisar the code y después hacemos el deploy.")}
 CLEANUP       = False                    # False = paste exactly what you said (pure dictation)
                                          # True = llama tidies punctuation/filler (NOT a chatbot)
 SAMPLE_RATE   = 16000
@@ -57,7 +57,8 @@ CLEANUP_PROMPT = (
     "Return ONLY the cleaned text with correct punctuation and capitalization, "
     "filler words (um, uh, like, you know) removed, and obvious transcription "
     "slips fixed. Do NOT answer questions, add commentary, translate, or wrap "
-    "in quotes. Preserve the speaker's wording and meaning."
+    "in quotes. Preserve the speaker's wording and meaning, and keep every word "
+    "in the language it was spoken in."
 )
 
 STYLE         = "edge"                  # "edge" = full-screen reactive edge glow
@@ -76,7 +77,7 @@ EDGE_FADE_MS = 450                                  # glow shrink-back time befo
 ISLAND_HTML  = os.path.join(HERE, "island.html")    # model picker, top-center
 ISLAND_MARGIN = 12                                  # = --m in island.html
 ISLAND_W, ISLAND_H = 216, 38                        # collapsed size (= --cw / --ch)
-ISLAND_MAX_W, ISLAND_MAX_H = 380, 560               # expanded width (= --ew) / panel height cap
+ISLAND_MAX_W, ISLAND_MAX_H = 380, 620               # expanded width (= --ew) / panel height cap
 SETTINGS_PATH = os.path.join(DATA_DIR, "settings.json")
 LEGACY_SETTINGS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.json")
 PILL_W, PILL_H = 248, 48
@@ -375,9 +376,16 @@ def setup_logging():
 
 
 # ── Settings: which models the user picked ──
+def default_languages():
+    """English plus the Windows display language."""
+    sys_lang = models.system_language()
+    return ["en"] if sys_lang in (None, "en") else ["en", sys_lang]
+
+
 def load_settings():
     s = {"stt": WHISPER_MODEL, "stt_paths": [],
          "llm": f"ollama:{LLM_MODEL}" if CLEANUP else ""}
+    existed = os.path.exists(SETTINGS_PATH) or os.path.exists(LEGACY_SETTINGS)
     if not os.path.exists(SETTINGS_PATH) and os.path.exists(LEGACY_SETTINGS):
         try:                                   # one-time move from the script folder
             os.replace(LEGACY_SETTINGS, SETTINGS_PATH)
@@ -388,6 +396,8 @@ def load_settings():
             s.update(json.load(f))
     except (OSError, ValueError):
         pass
+    if "languages" not in s:          # [] = detect any language
+        s["languages"] = ["en", "es"] if existed else default_languages()   # 1.0 was en + es
     return s
 
 
@@ -444,10 +454,11 @@ class FlowApp:
         self._cancel = threading.Event()    # discard (Esc)
         self.settings = load_settings()
         self.catalog = {"stt": [], "llm": []}
+        self.languages = models.whisper_languages()
         self.stt = None
         self.stt_id = None
         self._stt_wanted = None             # newest pick; older loads that finish late are dropped
-        self._lang_model = None             # tiny Whisper used only to choose en / es
+        self._lang_model = None             # tiny Whisper used only to detect the language
 
         self._build_tray()
         # load whisper + scan for models in the background so startup is instant
@@ -509,6 +520,7 @@ class FlowApp:
         self.bridge.models.emit(json.dumps({
             "stt": {"current": self.stt_id or self.settings["stt"], "items": self.catalog["stt"]},
             "llm": {"current": self.settings["llm"], "items": self.catalog["llm"]},
+            "lang": {"current": self.settings["languages"], "items": self.languages},
         }))
 
     def _refresh_catalog(self):
@@ -587,7 +599,9 @@ class FlowApp:
         self._push_models()
 
     def _select_model(self, kind, model_id):
-        if kind == "stt":
+        if kind == "lang":
+            self._toggle_language(model_id)
+        elif kind == "stt":
             if model_id != self.stt_id:
                 self._spawn(self._load_stt, model_id)
         elif kind == "llm":
@@ -597,6 +611,21 @@ class FlowApp:
                 self._push_models()
             elif model_id != self.settings["llm"]:
                 self._spawn(self._load_llm, model_id)
+
+    def _toggle_language(self, code):
+        """"" = detect any language; a code toggles it (the last one can't be removed)."""
+        langs = self.settings["languages"]
+        if not code:
+            langs = []
+        elif code in langs:
+            if len(langs) == 1:
+                return
+            langs = [l for l in langs if l != code]
+        else:
+            langs = langs + [code]
+        self.settings["languages"] = langs
+        save_settings(self.settings)
+        self._push_models()
 
     def _browse_model(self, kind):
         path = QFileDialog.getExistingDirectory(
@@ -701,20 +730,22 @@ class FlowApp:
         except Exception as e:
             log.warning("no tiny language detector, using the main model: %s", e)
 
-    def _pick_language(self, stt, audio):
-        """Detect the language, but only choose among LANGUAGES (full auto-detect
-        once heard a Spanish/English take as Russian)."""
-        if LANGUAGE or not stt.model.is_multilingual:
-            return LANGUAGE or "en"
+    def _pick_language(self, stt, audio, langs):
+        """The picked language, or detect among the picked ones ([] = any)."""
+        if not stt.model.is_multilingual:
+            return "en"
+        if len(langs) == 1:
+            return langs[0]
         _, _, probs = (self._lang_model or stt).detect_language(audio)
         probs = dict(probs)
-        return max(LANGUAGES, key=lambda lang: probs.get(lang, 0.0))
+        return max(langs or probs, key=lambda lang: probs.get(lang, 0.0))
 
     def _transcribe(self, audio):
         stt, t0 = self.stt, time.perf_counter()        # keep one model even if a switch lands mid-take
-        lang = self._pick_language(stt, audio)
+        langs = list(self.settings["languages"])
+        lang = self._pick_language(stt, audio, langs)
         segs, _ = stt.transcribe(audio, beam_size=1, language=lang,
-                                 initial_prompt=STT_PROMPT,
+                                 initial_prompt=MIXED_PROMPTS.get(frozenset(langs)),
                                  condition_on_previous_text=False)
         text = " ".join(s.text for s in segs).strip()
         log.info("transcribed %.1fs of audio in %.2fs (%s, %s)",

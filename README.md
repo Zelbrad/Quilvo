@@ -5,7 +5,7 @@
 Local voice dictation for Windows. Press **Alt+PageDown** anywhere, speak, press it again — the text is typed into whatever field your cursor is in. Speech recognition runs on your own PC with [faster-whisper](https://github.com/SYSTRAN/faster-whisper); nothing you say leaves your computer.
 
 - **Works in any app:** browser, chat, editor, email.
-- **English and Spanish,** including mixing both in one sentence.
+- **About 100 languages.** Pick the ones you speak; with English + Spanish you can even mix both in one sentence.
 - **Blue edge glow** around the screen that reacts to your voice while you speak.
 - **Model picker:** a "dynamic island" at the top of the screen. Hover it to switch speech models or turn on optional text cleanup with a local LLM ([Ollama](https://ollama.com) or [LM Studio](https://lmstudio.ai)).
 - **No models bundled:** the default speech model downloads automatically on first run. Others download when you pick them.
@@ -27,19 +27,29 @@ Requirements: Windows 10/11 (64-bit) and a microphone. No GPU needed; transcript
 | Start dictating | **Alt+PageDown** |
 | Stop and insert the text | **Alt+PageDown** again |
 | Cancel | **Esc** |
-| Change models | Hover the island at the top of the screen while dictating |
+| Change languages or models | Hover the island at the top of the screen while dictating |
 
 ### Speech models
 
 | Model | Size | Notes |
 |---|---|---|
-| `small` (default) | 486 MB | Best balance of speed and accuracy for English + Spanish |
-| `tiny` | 78 MB | Used automatically to detect English vs Spanish |
+| `small` (default) | 486 MB | Best balance of speed and accuracy |
+| `tiny` | 78 MB | Used automatically to detect which of your languages you're speaking |
 | `base` | 145 MB | Faster, less accurate |
 | `medium` | 1.5 GB | More accurate, several times slower on CPU |
 | `large-v3-turbo` | 1.6 GB | Most accurate, slow on CPU |
 
 Models that aren't downloaded show a ⬇ icon; click one to download it (the ring shows progress). You can also pick any faster-whisper / CTranslate2 model folder with **Browse for a model folder…**.
+
+### Languages
+
+Hover the island → **Language → Change** and tick the languages you speak. Quilvo starts with English plus your Windows display language.
+
+- **One language:** fastest and most accurate.
+- **Several:** Quilvo detects which one you're using each time. Speech in a language you haven't ticked comes out translated into one you have, so tick every language you speak.
+- **Detect any language:** works for everything, but short phrases are sometimes detected as the wrong language.
+
+Accuracy varies by language. `small` is very good for widely spoken languages like English, Spanish, French, German, Portuguese, Italian, Chinese or Japanese. For less common languages, try `medium` or `large-v3-turbo`.
 
 ### Text cleanup (optional)
 

@@ -114,6 +114,15 @@
   }
   .item.error .detail { color: #ff453a; }
   @keyframes spin { to { transform: rotate(360deg); } }
+  #langs { max-height: 400px; }
+  .views > div { display: none; }
+  body:not(.langs) .views .models, body.langs .views .languages { display: block; }
+  .item.lang .detail { color: var(--muted); }
+  .item.lang.picked .name { color: #fff; font-weight: 600; }
+  .item.lang.picked .mark::after {
+    content: ""; width: 5px; height: 10px; margin-top: -3px;
+    border: solid var(--accent); border-width: 0 2px 2px 0; transform: rotate(45deg);
+  }
   .empty { font-size: 12px; color: var(--muted); padding: 6px 10px 8px; line-height: 1.45; }
 </style>
 </head>
@@ -128,13 +137,24 @@
     <div class="panel" id="panel">
       <div class="head">
         <div class="orb"></div>
-        <div class="title">Models</div>
+        <div class="title" id="title">Models</div>
         <div class="status" id="status">Listening</div>
       </div>
-      <div class="section">Speech recognition</div>
-      <div class="list" id="stt"></div>
-      <div class="section">Text cleanup</div>
-      <div class="list" id="llm"></div>
+      <div class="views">
+        <div class="models">
+          <div class="section">Language</div>
+          <div class="list" id="langrow"></div>
+          <div class="section">Speech recognition</div>
+          <div class="list" id="stt"></div>
+          <div class="section">Text cleanup</div>
+          <div class="list" id="llm"></div>
+        </div>
+        <div class="languages">
+          <div class="list" id="langback"></div>
+          <div class="section">Languages you speak</div>
+          <div class="list" id="langs"></div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -146,7 +166,7 @@
   const M = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--m'));
   const CW = 216, CH = 38, EW = 380;
   let api = null;                          // Python side (QWebChannel object "island")
-  let models = { stt: { items: [] }, llm: { items: [] } };
+  let models = { stt: { items: [] }, llm: { items: [] }, lang: { current: [], items: [] } };
   let status = { stt: {}, llm: {} };       // id -> 'loading' | 'error'
   let progress = { stt: {}, llm: {} };     // id -> download progress 0..1 (<0 = unknown)
   let state = 'listening', leaving = false, hovering = false;
@@ -239,7 +259,34 @@
               <span class="mark"></span><span class="name">${esc(m.label)}</span>
               <span class="detail">${detail}</span></div>`;
   }
+  function langName(code) {
+    const it = models.lang.items.find(l => l.id === code);
+    return it ? it.label : code;
+  }
+  function renderLangs() {
+    const picked = models.lang.current, auto = !picked.length;
+    const summary = auto ? 'Any language' : picked.map(langName).join(', ');
+    document.getElementById('langrow').innerHTML =
+      `<div class="item" data-kind="view" data-id="langs"><span class="mark"></span>
+         <span class="name">${esc(summary)}</span><span class="detail">Change ›</span></div>`;
+    document.getElementById('langback').innerHTML =
+      `<div class="item action" data-kind="view" data-id="models"><span class="mark"></span>
+         <span class="name">‹ Back to models</span><span class="detail"></span></div>`;
+    const detail = picked.length === 1 ? 'Fastest' : '';
+    const first = `<div class="item lang${auto ? ' picked' : ''}" data-kind="lang" data-id="">
+         <span class="mark"></span><span class="name">Detect any language</span>
+         <span class="detail">Less accurate</span></div>`;
+    const ordered = [...picked.map(c => ({ id: c, label: langName(c) })),
+                     ...models.lang.items.filter(l => !picked.includes(l.id))];
+    document.getElementById('langs').innerHTML = first + ordered.map(l => {
+      const on = picked.includes(l.id);
+      return `<div class="item lang${on ? ' picked' : ''}" data-kind="lang" data-id="${esc(l.id)}">
+                <span class="mark"></span><span class="name">${esc(l.label)}</span>
+                <span class="detail">${on ? detail : ''}</span></div>`;
+    }).join('');
+  }
   function render() {
+    renderLangs();
     const stt = models.stt.items.map(m => row('stt', m)).join('')
               + row('stt', { id: '__browse__', label: 'Browse for a model folder…', detail: '', action: true });
     const llmItems = [{ id: '', label: 'Off', detail: 'Paste exactly what you say' }, ...models.llm.items];
@@ -254,14 +301,20 @@
   document.addEventListener('click', e => {
     const it = e.target.closest('.item'); if (!it || !api) return;
     const { kind, id } = it.dataset;
-    if (id === '__browse__') api.browse(kind);
+    if (kind === 'view') {
+      body.classList.toggle('langs', id === 'langs');
+      document.getElementById('title').textContent = id === 'langs' ? 'Language' : 'Models';
+      if (id === 'langs') document.getElementById('langs').scrollTop = 0;
+      sizeToContent();
+    }
+    else if (id === '__browse__') api.browse(kind);
     else api.select(kind, id);
   });
 
   // ── hover to expand. api.resize() tells Python the island's footprint; it clips
   //    the (fixed-size) window to it so the transparent area never blocks clicks
   //    on apps behind — without resizing the window, which made the island blink. ──
-  function panelHeight() { return Math.min(panel.scrollHeight, 560); }
+  function panelHeight() { return Math.min(panel.scrollHeight, 620); }
   function sizeToContent() {
     const h = panelHeight();
     document.documentElement.style.setProperty('--eh', h + 'px');
@@ -275,6 +328,8 @@
   function collapse() {
     body.classList.remove('expanded');
     shrinkTimer = setTimeout(() => {                   // shrink the window after the morph
+      body.classList.remove('langs');
+      document.getElementById('title').textContent = 'Models';
       if (api) api.resize(CW + 2 * M, CH + 2 * M);
       if (leaving) disappear();
     }, 520);
