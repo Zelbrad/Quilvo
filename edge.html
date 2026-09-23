@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; width: 100%; height: 100%; background: transparent; overflow: hidden; }
+  /* the glow is rendered at 1/SCALE resolution and stretched — it's soft light,
+     so bilinear upscaling is invisible and it stays cheap at full-screen size */
+  #glow { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+</style>
+</head>
+<body>
+<canvas id="glow"></canvas>
+
+<script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+<script>
+  // ── Full-screen edge glow. Light seeps in from every screen edge; how far it
+  //    reaches is modulated by a slowly drifting noise field, so the rim breathes
+  //    and swells unevenly (alive, not wavy). Your voice pushes it further in and
+  //    speeds up the drift. ──
+  const SCALE = 8;              // css px per glow pixel
+  const EDGE = {
+    reach: 55,                  // css px the glow extends inward at rest
+    voice: 170,                 // extra reach at full voice
+    swell: 1.25,                // how uneven the rim is (0 = uniform band)
+    corner: 45,                 // corner softness (smooth-min radius)
+    opacity: 1.0,
+  };
+  // saturated blue family, like the reference
+  const DEEP   = [29, 78, 216];     // blue-700
+  const BLUE   = [37, 99, 235];     // blue-600
+  const CYAN   = [6, 182, 212];     // cyan-500
+  const ICE    = [125, 211, 252];   // sky-300 — the hot rim, stays blue (no white wash)
+  const VIOLET = [124, 58, 237];    // processing tint
+
+  const cv = document.getElementById('glow');
+  const ctx = cv.getContext('2d');
+  let img = null, W = 0, H = 0;
+
+  let level = 0, disp = 0;
+  let presence = 0, target = 0;      // 0 = tucked into the edges, 1 = fully out
+  let busy = 0, busyTarget = 0;      // 0 = listening look, 1 = processing look
+  let phase = 0, last = performance.now();
+
+  function fit() {
+    const w = Math.max(1, Math.ceil(window.innerWidth / SCALE));
+    const h = Math.max(1, Math.ceil(window.innerHeight / SCALE));
+    if (w !== W || h !== H) {
+      W = cv.width = w; H = cv.height = h;
+      img = ctx.createImageData(W, H);
+      sizeTables();
+    }
+  }
+
+  // drifting wave terms: [x frequency, y frequency, phase speed]
+  const WAVES = [
+    [0.0042,  0.0038,  1.1],   // reach: broad swells
+    [0.0031, -0.0031,  1.7],   //        diagonal drift one way
+    [0.0072,  0.0072, -2.3],   //        finer ripple the other way
+    [0.0021, -0.0017,  0.55],  // colour: cyan pockets
+    [0.0013,  0.0024, -0.4],   //         deep ↔ bright blue
+  ];
+  const table = n => ({ s: new Float32Array(n), c: new Float32Array(n) });
+  let cols = [], rows = [];
+  function sizeTables() {
+    cols = WAVES.map(() => table(W));
+    rows = WAVES.map(() => table(H));
+  }
+
+  function frame(now) {
+    const dt = Math.min(0.05, (now - last) / 1000); last = now;
+    fit();
+
+    presence += (target - presence) * (target > presence ? 0.07 : 0.14);
+    busy += (busyTarget - busy) * 0.06;
+    disp += (level - disp) * 0.12;      // eased, so swells grow smoothly instead of jumping
+    level *= 0.93;
+    phase += dt * (0.9 + 2.2 * disp) * (1 - 0.5 * busy);   // voice speeds the drift
+
+    const d = img.data;
+    if (presence < 0.002 && target === 0) {           // fully tucked away: blank once, idle
+      if (d[3] !== 0 || d[d.length - 1] !== 0) { d.fill(0); ctx.putImageData(img, 0, 0); }
+      requestAnimationFrame(frame);
+      return;
+    }
+
+    const cw = W * SCALE, ch = H * SCALE, k = EDGE.corner;
+    const pulse = 1 + 0.18 * busy * Math.sin(now / 1000 * 3.2);
+    const reachBase = presence * pulse * (EDGE.reach * (1 - 0.35 * busy) + EDGE.voice * disp);
+    // the glow is cut at 1% and the falloff re-based to land exactly on 0 there,
+    // so no pixel ever jumps from visible to nothing (that jump drew straight lines)
+    const FLOOR = 0.01, CUT = Math.log(1 / FLOOR) / 2.4;   // cutoff, in units of reach
+    const swellLo = 1 - EDGE.swell / 2, swellHi = EDGE.swell * 1.3;   // reach = base·(lo + hi·n²)
+    const maxReach = reachBase * (swellLo + swellHi) * CUT;          // widest swell × cutoff
+
+    // every wave term is sin(a·x ± b·y + p): split it with the angle-sum identity
+    // into per-column and per-row tables, so the pixel loop does no trig at all
+    for (let t = 0; t < WAVES.length; t++) {
+      const [ax, by, ps] = WAVES[t], p = phase * ps, X = cols[t], Y = rows[t];
+      for (let i = 0; i < W; i++) { const x = (i + 0.5) * SCALE; X.s[i] = Math.sin(ax * x + p); X.c[i] = Math.cos(ax * x + p); }
+      for (let j = 0; j < H; j++) { const y = (j + 0.5) * SCALE; Y.s[j] = Math.sin(by * y);     Y.c[j] = Math.cos(by * y); }
+    }
+    // hot loop: tables pulled into locals, sin(ax·x + p + by·y) = sx·cy + cx·sy
+    const [X0, X1, X2, X3, X4] = cols, [Y0, Y1, Y2, Y3, Y4] = rows;
+    const k4 = 4 * k, cornerPull = k * Math.LN2;   // smooth-min lowers dist by at most k·ln2
+    const alphaGain = 255 * EDGE.opacity * (0.85 + 0.3 * disp);
+    const vb = busy * 0.6;
+
+    for (let j = 0; j < H; j++) {
+      const y = (j + 0.5) * SCALE, dtp = y, db = ch - y;
+      const y0s = Y0.s[j], y0c = Y0.c[j], y1s = Y1.s[j], y1c = Y1.c[j], y2s = Y2.s[j], y2c = Y2.c[j];
+      const y3s = Y3.s[j], y3c = Y3.c[j], y4s = Y4.s[j], y4c = Y4.c[j];
+      const rowEdge = dtp < db ? dtp : db;
+      let o = j * W * 4;
+      for (let i = 0; i < W; i++, o += 4) {
+        const x = (i + 0.5) * SCALE, dl = x, dr = cw - x;
+        const colEdge = dl < dr ? dl : dr;
+        const dmin = rowEdge < colEdge ? rowEdge : colEdge;
+        if (dmin - cornerPull > maxReach) { d[o + 3] = 0; continue; }   // corners pull dist in
+
+        // rounded corners: smooth-min of the nearest row and column edge
+        // (only matters near a corner — elsewhere this is just dmin)
+        const gap = rowEdge < colEdge ? colEdge - rowEdge : rowEdge - colEdge;
+        const dist = gap < k4 ? dmin - k * Math.log(1 + Math.exp(-gap / k)) : dmin;
+
+        // organic reach: layered drifting waves, 0..1
+        const n = 0.5 + 0.5 * (0.5 * (X0.s[i] * y0c + X0.c[i] * y0s)
+                             + 0.3 * (X1.s[i] * y1c + X1.c[i] * y1s)
+                             + 0.2 * (X2.s[i] * y2c + X2.c[i] * y2s));
+        const reach = reachBase * (swellLo + swellHi * n * n);
+        if (reach < 0.5) { d[o + 3] = 0; continue; }
+
+        const e = Math.exp(-2.4 * (dist > 0 ? dist : 0) / reach);  // soft falloff inward…
+        if (e <= FLOOR) { d[o + 3] = 0; continue; }
+        const a = (e - FLOOR) / (1 - FLOOR);                          // …landing smoothly on 0
+        const core = 0.45 * a * a;                                    // same curve, tighter rim
+
+        // colour drifts along the rim: deep blue ↔ cyan pockets; violet when processing
+        const m1 = 0.5 + 0.5 * (X3.s[i] * y3c + X3.c[i] * y3s);
+        const m2 = 0.5 + 0.5 * (X4.s[i] * y4c + X4.c[i] * y4s);
+        const cy = m1 * m1 * m1 * 0.8;
+        for (let c = 0; c < 3; c++) {
+          let v = DEEP[c] + (BLUE[c] - DEEP[c]) * m2;
+          v += (CYAN[c] - v) * cy;
+          v += (VIOLET[c] - v) * vb;
+          d[o + c] = v + (ICE[c] - v) * core;
+        }
+        const al = a * alphaGain;
+        d[o + 3] = al > 255 ? 255 : al;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+
+  // ── API called from Python (same shape as the pill overlay) ──
+  function setLevel(v) {
+    v = Math.max(0, Math.min(1, v));
+    if (v > level) level = v;            // take the peak between frames
+  }
+  function setState(s) {
+    busyTarget = (s === 'listening') ? 0 : 1;
+    if (busyTarget) { level = 0; }
+  }
+  function start() {                     // grow in from the edges
+    presence = 0; target = 1; busy = busyTarget = 0; disp = level = 0;
+  }
+  function leave() { target = 0; }       // shrink back into the edges
+  function setBackdrop() {}              // pill-only; the edge glow doesn't need it
+
+  new QWebChannel(qt.webChannelTransport, function (channel) {
+    window.flow = channel.objects.flow;
+  });
+</script>
+</body>
+</html>

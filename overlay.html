@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root {
+    --pad: 24px;          /* transparent margin around the pill — must match PAD in flow.py    */
+    --m:   40px;          /* extra desktop captured past the window — must match MARGIN in flow.py */
+    --lvl: 0;             /* live mic level 0..1, driven from JS */
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; user-select: none; }
+  html, body {
+    width: 100%; height: 100%;
+    background: transparent; overflow: hidden;
+    font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ── the pill ─────────────────────────────────────────── */
+  .pill {
+    position: absolute; inset: var(--pad);
+    display: flex; align-items: center; gap: 12px;
+    padding: 0 18px;
+    border-radius: 999px;
+    overflow: hidden;
+    cursor: pointer;
+    /* soft float shadow — kept inside --pad so the window edge never clips it */
+    box-shadow: 0 8px 20px -6px rgba(0,0,0,.50),
+                0 2px 6px rgba(0,0,0,.22);
+    animation: enter .45s cubic-bezier(.2,.9,.25,1.12) both;
+  }
+  @keyframes enter {
+    from { opacity: 0; transform: translateY(6px) scale(.94); }
+    to   { opacity: 1; transform: none; }
+  }
+
+  /* glass stack, back to front */
+  .layer { position: absolute; pointer-events: none; border-radius: inherit; }
+
+  /* 1. liquid glass: the desktop behind the pill, refracted through a lens-shaped
+        rim in JS (see renderGlass) — clear in the middle, bending at the edges */
+  #glass { inset: 0; width: 100%; height: 100%; }
+  /* 2. light smoke — just enough for the bars to read on bright wallpapers */
+  .tint {
+    inset: 0;
+    background: rgba(14,14,22,.18);
+    transition: background .2s;
+  }
+  /* over bright content, deepen the smoke so the white bars keep their contrast */
+  body.on-light .tint {
+    background: rgba(14,14,22,.42);
+  }
+  /* 3. accent bloom from below, brightens as you speak */
+  .bloom {
+    inset: 0;
+    background: radial-gradient(55% 140% at 50% 125%, rgba(139,92,246,.45), transparent 70%);
+    opacity: calc(.15 + .85 * var(--lvl));
+  }
+  /* 4. flat, even hairline border — no lighting, keeps it 2D */
+  .ring {
+    inset: 0; z-index: 10;
+    border: 1px solid rgba(255,255,255,.16);
+  }
+
+  /* ── content ──────────────────────────────────────────── */
+  .content { position: relative; z-index: 5; }
+
+  /* bar visualizer + status label share this slot */
+  .viz { flex: 1 1 auto; height: 100%; }
+  #bars { width: 100%; height: 100%; display: block; transition: opacity .2s; }
+  .label {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12.5px; font-weight: 600; letter-spacing: .015em;
+    color: transparent;
+    background: linear-gradient(90deg,
+                rgba(255,255,255,.62) 0%, rgba(255,255,255,.62) 35%,
+                #ffffff 48%, #ddd6fe 52%,
+                rgba(255,255,255,.62) 65%, rgba(255,255,255,.62) 100%);
+    background-size: 250% 100%;
+    -webkit-background-clip: text; background-clip: text;
+    animation: shimmer 1.5s linear infinite;
+    opacity: 0; transition: opacity .2s;
+  }
+  @keyframes shimmer {
+    from { background-position: 100% 0; }
+    to   { background-position: -150% 0; }
+  }
+
+  /* ── processing state ── */
+  body.processing #bars  { opacity: 0; }
+  body.processing .label { opacity: 1; }
+</style>
+</head>
+<body>
+  <div class="pill" id="pill">
+    <canvas class="layer" id="glass"></canvas>
+    <div class="layer tint"></div>
+    <div class="layer bloom"></div>
+    <div class="layer ring"></div>
+
+    <div class="content viz">
+      <canvas id="bars"></canvas>
+      <div class="label" id="label"></div>
+    </div>
+  </div>
+
+<script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+<script>
+  // ── glowing bar visualizer. Each bar mixes two drifting sines (so the shape
+  //    keeps morphing), is weighted toward the centre, and rises fast / falls
+  //    soft. Amplitude follows your real mic level; at rest it's a quiet ripple. ──
+  const canvas = document.getElementById('bars');
+  const ctx = canvas.getContext('2d');
+  const rootStyle = document.documentElement.style;
+  const labelEl = document.getElementById('label');
+  const pill = document.getElementById('pill');
+
+  const BAR_W = 3, GAP = 3;             // css px
+  let dpr = 1, heights = [];
+  let level = 0, disp = 0;
+
+  function fit() {
+    dpr = window.devicePixelRatio || 1;
+    const w = Math.max(1, Math.round(canvas.clientWidth * dpr));
+    const h = Math.max(1, Math.round(canvas.clientHeight * dpr));
+    if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+  }
+
+  function bar(x, y, w, h) {
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(x, y, w, h, w / 2); else ctx.rect(x, y, w, h);
+    ctx.fill();
+  }
+
+  function frame(now) {
+    fit();
+    const t = now / 1000;
+    disp += (level - disp) * 0.25;      // quick attack
+    level *= 0.88;                      // decay so pauses fall back
+    rootStyle.setProperty('--lvl', disp.toFixed(3));
+
+    const w = canvas.width, h = canvas.height;
+    const bw = BAR_W * dpr, gap = GAP * dpr;
+    const n = Math.max(1, Math.floor((w + gap) / (bw + gap)));
+    const x0 = (w - (n * bw + (n - 1) * gap)) / 2;
+    const minH = bw, maxH = h * 0.64;
+    if (heights.length !== n) heights = new Array(n).fill(0);
+
+    ctx.clearRect(0, 0, w, h);
+    const grad = ctx.createLinearGradient(0, 0, w, 0);
+    grad.addColorStop(0.0, '#818cf8');
+    grad.addColorStop(0.5, '#f5f3ff');
+    grad.addColorStop(1.0, '#c084fc');
+    ctx.fillStyle = grad;
+    ctx.shadowColor = 'rgba(167,139,250,.6)';
+    ctx.shadowBlur = 7 * dpr;
+
+    const drive = Math.min(1, disp * 1.35);
+    for (let i = 0; i < n; i++) {
+      const u = n === 1 ? 0.5 : i / (n - 1);
+      const env = 0.22 + 0.78 * Math.pow(Math.sin(Math.PI * u), 1.4);
+      const jitter = 0.55 + 0.45 * (0.6 * Math.sin(i * 1.7 + t * 7.3)
+                                  + 0.4 * Math.sin(i * 0.63 - t * 4.1));
+      const idle = 0.07 * (0.5 + 0.5 * Math.sin(t * 2.4 - i * 0.38));
+      const target = Math.min(1, idle + drive * env * jitter);
+      heights[i] += (target - heights[i]) * (target > heights[i] ? 0.45 : 0.12);
+
+      const bh = minH + (maxH - minH) * heights[i];
+      ctx.globalAlpha = 0.30 + 0.70 * env;
+      bar(x0 + i * (bw + gap), (h - bh) / 2, bw, bh);
+    }
+    ctx.globalAlpha = 1;
+
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+
+  // ── API called from Python ──
+  const LABELS = { transcribing: 'Transcribing', cleaning: 'Polishing', pasting: 'Inserting' };
+
+  function setLevel(v) {
+    v = Math.max(0, Math.min(1, v));
+    if (v > level) level = v;           // take the peak between frames
+  }
+  function setState(s) {
+    const listening = (s === 'listening');
+    document.body.classList.toggle('processing', !listening);
+    labelEl.textContent = LABELS[s] || '';
+    if (!listening) { level = 0; disp = 0; }
+  }
+  function setBackdrop(uri) {
+    const glass = document.getElementById('glass');
+    glass.getContext('2d').clearRect(0, 0, glass.width, glass.height);  // drop last session's view
+    const img = new Image();
+    img.onload = () => renderGlass(img);
+    img.src = uri;
+  }
+
+  // ── liquid glass: refract the captured desktop through a capsule-shaped lens.
+  //    Centre stays clear (slightly magnified); within `bezel` of the rim, samples
+  //    are pulled inward along the edge normal, with a small RGB split. ──
+  const GLASS = {
+    blur: 3,            // css px frost through the body of the glass
+    rimBlur: 0.4,       // css px — rim stays crisp so the inverted band reads
+    saturate: 1.6,
+    zoom: 0.94,         // <1 = centre magnified, like looking through thick glass
+    bezel: 12,          // css px width of the curved rim where light bends
+    refract: 22,        // css px sample shift at the very edge — past bezel/curve it flips (inverts)
+    curve: 1.7,         // rim profile: higher = bend concentrated closer to the edge
+    aberration: 0.16,   // RGB split in the rim (0 = none)
+  };
+
+  function renderGlass(img) {
+    const glass = document.getElementById('glass');
+    const dpr = window.devicePixelRatio || 1;
+    const M = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--m')) || 0;
+    // offset* ignore the entrance transform, so geometry is the resting layout
+    const pw = pill.offsetWidth, ph = pill.offsetHeight;
+    const left = pill.offsetLeft, top = pill.offsetTop;
+    const S = 32;                                            // slack read past the pill edge
+    const k = img.naturalWidth / (window.innerWidth + 2 * M); // image px per css px
+
+    // 1. crop pill + slack out of the capture (capture origin = window origin - M),
+    //    once frosted for the body and once near-sharp for the rim
+    const SW = Math.round((pw + 2 * S) * dpr), SH = Math.round((ph + 2 * S) * dpr);
+    function crop(blur) {
+      const src = document.createElement('canvas');
+      src.width = SW; src.height = SH;
+      const sctx = src.getContext('2d');
+      sctx.filter = `blur(${blur * dpr}px) saturate(${GLASS.saturate})`;
+      sctx.drawImage(img, (M + left - S) * k, (M + top - S) * k,
+                     (pw + 2 * S) * k, (ph + 2 * S) * k, 0, 0, SW, SH);
+      return sctx.getImageData(0, 0, SW, SH).data;
+    }
+    const body = crop(GLASS.blur), rim = crop(GLASS.rimBlur);
+
+    function sample(sd, x, y, c) {                           // bilinear, src device px
+      x = Math.max(0, Math.min(SW - 1.001, x));
+      y = Math.max(0, Math.min(SH - 1.001, y));
+      const xi = x | 0, yi = y | 0, fx = x - xi, fy = y - yi;
+      const i = (yi * SW + xi) * 4 + c, j = i + SW * 4;
+      return (sd[i] * (1 - fx) + sd[i + 4] * fx) * (1 - fy)
+           + (sd[j] * (1 - fx) + sd[j + 4] * fx) * fy;
+    }
+
+    // 2. refract into the pill-sized canvas
+    const W = Math.round(pw * dpr), H = Math.round(ph * dpr);
+    glass.width = W; glass.height = H;
+    const gctx = glass.getContext('2d');
+    const out = gctx.createImageData(W, H), od = out.data;
+    const rad = ph / 2, half = pw / 2 - rad;
+    let lum = 0, lumN = 0;
+
+    for (let py = 0; py < H; py++) {
+      for (let px = 0; px < W; px++) {
+        const x = (px + 0.5) / dpr - pw / 2, y = (py + 0.5) / dpr - ph / 2;  // from centre
+        const qx = Math.sign(x) * Math.max(Math.abs(x) - half, 0);
+        const dist = Math.hypot(qx, y), depth = rad - dist;                   // 0 at rim
+        if (depth < 0) continue;
+        const nx = dist ? qx / dist : 0, ny = dist ? y / dist : 0;
+        const e = Math.max(0, 1 - depth / GLASS.bezel);      // 1 at rim → 0 inside
+        const shift = GLASS.refract * Math.pow(e, GLASS.curve);
+        const sharp = Math.min(1, e * 1.8);                  // rim crisp → body frosted
+        const o = (py * W + px) * 4;
+        for (let c = 0; c < 3; c++) {
+          // pull samples inward along the normal; near the rim the pull outruns
+          // the distance travelled, so the band shows the backdrop mirrored
+          const s = shift * (1 + (c - 1) * GLASS.aberration);
+          const sx = (x * GLASS.zoom - nx * s + pw / 2 + S) * dpr;
+          const sy = (y * GLASS.zoom - ny * s + ph / 2 + S) * dpr;
+          od[o + c] = sample(rim, sx, sy, c) * sharp + sample(body, sx, sy, c) * (1 - sharp);
+        }
+        od[o + 3] = 255 * Math.min(1, depth * dpr + 0.5);   // anti-aliased edge
+        lum += 0.2126 * od[o] + 0.7152 * od[o + 1] + 0.0722 * od[o + 2]; lumN++;
+      }
+    }
+    gctx.putImageData(out, 0, 0);
+    document.body.classList.toggle('on-light', lumN && lum / lumN > 150);
+  }
+  function start() {
+    heights = [];
+    setState('listening');
+    pill.style.animation = 'none'; void pill.offsetWidth; pill.style.animation = '';  // replay entrance
+  }
+
+  // ── click the pill -> tell Python to stop (toggle) ──
+  new QWebChannel(qt.webChannelTransport, function (channel) {
+    window.flow = channel.objects.flow;
+  });
+  pill.addEventListener('click', function () {
+    if (window.flow) window.flow.onClick();
+  });
+</script>
+</body>
+</html>

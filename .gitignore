@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.pyc
+.venv*/
+
+# PyInstaller output
+build/
+dist/
+
+# local-only files (settings and logs live in %APPDATA%\Flow)
+settings.json
+*.log
+*.bak

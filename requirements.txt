@@ -1,0 +1,9 @@
+# Flow — runtime dependencies (tested with Python 3.14 on Windows 11)
+PySide6==6.11.1            # UI: tray, overlay windows, QtWebEngine for the glow / island
+faster-whisper==1.2.1      # speech-to-text (CTranslate2 Whisper, CPU int8)
+ctranslate2==4.7.1
+huggingface_hub==1.10.1    # model downloads (Flow switches Xet off for faster, progressive downloads)
+sounddevice==0.5.5         # microphone
+pynput==1.8.2              # global hotkey + Ctrl+V
+numpy==2.4.4
+requests==2.33.1           # local LLM servers (Ollama / LM Studio)

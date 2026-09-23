@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root {
+    --m: 12px;                /* transparent margin around the island (= ISLAND_MARGIN in flow.py) */
+    --cw: 216px; --ch: 38px;  /* collapsed size */
+    --ew: 380px;              /* expanded width (height is measured from the content) */
+    --lvl: 0;
+    --bg: #000;
+    --row: rgba(255,255,255,.07);
+    --text: #f5f5f7;
+    --muted: #8e8e93;
+    --accent: #0a84ff;
+    --spring: cubic-bezier(.32,1.28,.54,1);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; user-select: none; }
+  html, body { width: 100%; height: 100%; background: transparent; overflow: hidden;
+               font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+               -webkit-font-smoothing: antialiased; color: var(--text); }
+
+  /* ── the island: one black shape that morphs between pill and panel ── */
+  .island {
+    position: absolute; top: var(--m); left: 50%;
+    width: var(--cw); height: var(--ch);
+    transform: translateX(-50%) scale(var(--s, 1));
+    background: var(--bg);
+    border-radius: 19px;
+    overflow: hidden;
+    transition: width .5s var(--spring), height .5s var(--spring),
+                border-radius .5s var(--spring), transform .45s var(--spring),
+                opacity .25s ease;
+    box-shadow: 0 0 0 1px rgba(255,255,255,.06);
+  }
+  body.expanded .island { width: var(--ew); height: var(--eh, 300px); border-radius: 30px; }
+  body.away .island { --s: .35; opacity: 0; }
+
+  /* ── compact row: orb · label · mini bars ── */
+  .compact {
+    position: absolute; inset: 0 0 auto 0; height: var(--ch);
+    display: flex; align-items: center; gap: 10px; padding: 0 14px 0 13px;
+    transition: opacity .2s ease;
+  }
+  body.expanded .compact { opacity: 0; pointer-events: none; }
+  .orb {
+    width: 12px; height: 12px; border-radius: 50%; flex: none;
+    background: radial-gradient(circle at 35% 30%, #bfe3ff 0, #38bdf8 35%, #2563eb 75%);
+    box-shadow: 0 0 calc(4px + 12px * var(--lvl)) rgba(56,189,248,.85);
+    transform: scale(calc(.85 + .35 * var(--lvl)));
+  }
+  .label { flex: 1; min-width: 0; font-size: 12.5px; font-weight: 600; letter-spacing: .01em;
+           white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .label .sub { color: var(--muted); font-weight: 500; }
+  .bars { display: flex; align-items: center; gap: 2.5px; height: 16px; flex: none; }
+  .bars i { width: 3px; height: 4px; border-radius: 2px; background: #38bdf8;
+            transition: height .09s ease; }
+  body.busy .bars i { animation: hop .9s ease-in-out infinite; }
+  body.busy .bars i:nth-child(2) { animation-delay: .12s; }
+  body.busy .bars i:nth-child(3) { animation-delay: .24s; }
+  body.busy .bars i:nth-child(4) { animation-delay: .36s; }
+  @keyframes hop { 0%,100% { height: 4px; opacity: .5; } 40% { height: 12px; opacity: 1; } }
+
+  /* ── expanded panel ── */
+  .panel {
+    position: absolute; top: 0; left: 50%; width: var(--ew);
+    transform: translateX(-50%);
+    padding: 14px 10px 10px;
+    opacity: 0; transition: opacity .18s ease;
+    pointer-events: none;
+  }
+  body.expanded .panel { opacity: 1; pointer-events: auto; transition: opacity .3s ease .12s; }
+  .head { display: flex; align-items: center; gap: 10px; padding: 0 8px 10px; }
+  .head .title { font-size: 14px; font-weight: 700; flex: 1; }
+  .head .status { font-size: 12px; color: var(--muted); }
+  .section { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase;
+             letter-spacing: .06em; padding: 10px 10px 5px; }
+  .list { max-height: 238px; overflow-y: auto; }
+  .list::-webkit-scrollbar { width: 6px; }
+  .list::-webkit-scrollbar-thumb { background: rgba(255,255,255,.14); border-radius: 3px; }
+
+  .item {
+    display: flex; align-items: center; gap: 10px;
+    height: 34px; padding: 0 10px; border-radius: 12px; cursor: pointer;
+    transition: background .12s ease;
+  }
+  .item:hover { background: var(--row); }
+  .item .name { flex: 1; min-width: 0; font-size: 13px; font-weight: 500;
+                white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .item .detail { font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+  .item .mark { width: 16px; flex: none; display: flex; justify-content: center; }
+  .item.current .name { color: #fff; font-weight: 600; }
+  .item.current .mark::after {
+    content: ""; width: 5px; height: 10px; margin-top: -3px;
+    border: solid var(--accent); border-width: 0 2px 2px 0; transform: rotate(45deg);
+  }
+  .item.missing .name { color: #c7c7cc; }
+  /* not downloaded yet: blue download icon + size, so it's obvious a click fetches it */
+  .item.missing .detail { color: var(--accent); display: flex; align-items: center; gap: 5px; }
+  .item.missing .detail svg { width: 13px; height: 13px; flex: none; }
+  /* downloading: the download icon becomes a ring whose circumference fills */
+  .ring { width: 15px; height: 15px; flex: none; transform: rotate(-90deg); }
+  .ring circle { fill: none; stroke-width: 2; }
+  .ring .track { stroke: rgba(10,132,255,.22); }
+  .ring .bar { stroke: var(--accent); stroke-linecap: round;
+               transition: stroke-dashoffset .3s linear; }
+  .ring.unknown { animation: ringspin .9s linear infinite; }  /* size unknown: spinning arc */
+  @keyframes ringspin { from { transform: rotate(-90deg); } to { transform: rotate(270deg); } }
+  .item.action .name { color: var(--accent); }
+  .item.busy .mark::after {
+    content: ""; width: 11px; height: 11px; border-radius: 50%;
+    border: 1.5px solid rgba(255,255,255,.18); border-top-color: var(--accent);
+    animation: spin .7s linear infinite;
+  }
+  .item.error .detail { color: #ff453a; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .empty { font-size: 12px; color: var(--muted); padding: 6px 10px 8px; line-height: 1.45; }
+</style>
+</head>
+<body class="away">
+  <div class="island" id="island">
+    <div class="compact">
+      <div class="orb"></div>
+      <div class="label" id="label">Quilvo</div>
+      <div class="bars" id="bars"><i></i><i></i><i></i><i></i></div>
+    </div>
+
+    <div class="panel" id="panel">
+      <div class="head">
+        <div class="orb"></div>
+        <div class="title">Models</div>
+        <div class="status" id="status">Listening</div>
+      </div>
+      <div class="section">Speech recognition</div>
+      <div class="list" id="stt"></div>
+      <div class="section">Text cleanup</div>
+      <div class="list" id="llm"></div>
+    </div>
+  </div>
+
+<script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+<script>
+  const body = document.body;
+  const islandEl = document.getElementById('island');
+  const panel = document.getElementById('panel');
+  const M = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--m'));
+  const CW = 216, CH = 38, EW = 380;
+  let api = null;                          // Python side (QWebChannel object "island")
+  let models = { stt: { items: [] }, llm: { items: [] } };
+  let status = { stt: {}, llm: {} };       // id -> 'loading' | 'error'
+  let progress = { stt: {}, llm: {} };     // id -> download progress 0..1 (<0 = unknown)
+  let state = 'listening', leaving = false, hovering = false;
+  let openTimer = 0, closeTimer = 0, shrinkTimer = 0;
+
+  // ── Python → JS ──
+  function setModels(json) { models = JSON.parse(json); render(); }
+  function setModelStatus(kind, id, s) {
+    if (s === 'ready') delete status[kind][id]; else status[kind][id] = s;
+    if (s !== 'loading') delete progress[kind][id];
+    render();
+  }
+  function setModelProgress(kind, id, p) {
+    const first = !(id in progress[kind]);
+    progress[kind][id] = p;
+    // update the ring in place so its stroke animates instead of being redrawn
+    const row = [...document.querySelectorAll('.item')].find(r => r.dataset.kind === kind && r.dataset.id === id);
+    const bar = row && row.querySelector('.ring .bar');
+    if (!row || first || !bar || (p >= 0) === row.querySelector('.ring').classList.contains('unknown')) return render();
+    bar.setAttribute('stroke-dashoffset', RING_C * (1 - p));
+    row.querySelector('.dl-text').textContent = downloadText(p);
+  }
+  function setState(s) {
+    state = s;
+    body.classList.toggle('busy', s !== 'listening');
+    document.getElementById('status').textContent =
+      { listening: 'Listening', transcribing: 'Transcribing…', cleaning: 'Polishing…', pasting: 'Inserting…' }[s] || '';
+    renderLabel();
+  }
+  let lvl = 0;
+  function setLevel(v) {
+    lvl = Math.max(lvl * 0.6, Math.max(0, Math.min(1, v)));
+    document.documentElement.style.setProperty('--lvl', lvl.toFixed(3));
+    const bars = document.querySelectorAll('#bars i'), shape = [0.55, 1, 0.8, 0.45];
+    if (state === 'listening')
+      bars.forEach((b, i) => b.style.height = (4 + 12 * lvl * shape[i] * (0.7 + 0.3 * Math.random())) + 'px');
+  }
+  function start() {                       // appear: grow out of a dot, like the iPhone island
+    leaving = false; clearTimeout(shrinkTimer);
+    body.classList.remove('expanded');
+    body.classList.add('away');
+    setState('listening');
+    requestAnimationFrame(() => requestAnimationFrame(() => body.classList.remove('away')));
+  }
+  function leave() {                       // session over — stay open while the mouse is on it
+    leaving = true;
+    if (!hovering) disappear();
+  }
+
+  // ── rendering ──
+  const DOWNLOAD_ICON = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+    'stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.5v7.5M4.8 7l3.2 3.2L11.2 7M3 13.5h10"/></svg>';
+  const RING_C = 2 * Math.PI * 6;                  // ring radius 6 in a 15×15 box
+  function ringHtml(p) {                           // p: 0..1, or <0 when the size is unknown
+    const known = p >= 0, off = RING_C * (1 - (known ? p : 0.25));
+    return `<svg class="ring${known ? '' : ' unknown'}" viewBox="0 0 15 15">
+              <circle class="track" cx="7.5" cy="7.5" r="6"/>
+              <circle class="bar" cx="7.5" cy="7.5" r="6" stroke-dasharray="${RING_C}" stroke-dashoffset="${off}"/></svg>`;
+  }
+  const downloadText = p => p >= 0 ? `Downloading · ${Math.floor(p * 100)}%` : 'Downloading…';
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  function shortName(id) {
+    if (!id) return '';
+    const it = [...models.stt.items, ...models.llm.items].find(m => m.id === id);
+    return it ? it.label : id.split(/[\\/]/).pop();
+  }
+  function renderLabel() {
+    const busyText = { transcribing: 'Transcribing', cleaning: 'Polishing', pasting: 'Inserting' }[state];
+    const stt = shortName(models.stt.current), llm = shortName(models.llm.current);
+    document.getElementById('label').innerHTML = busyText
+      ? esc(busyText) + '<span class="sub"> · ' + esc(stt) + '</span>'
+      : esc(stt || 'Quilvo') + (llm ? '<span class="sub"> · ' + esc(llm) + '</span>' : '');
+  }
+  function row(kind, m) {
+    const st = status[kind][m.id];
+    const downloading = st === 'loading' && m.installed === false;
+    const cls = ['item', m.id === models[kind].current && !st ? 'current' : '',
+                 m.installed === false ? 'missing' : '',
+                 st === 'loading' && !downloading ? 'busy' : '',   // downloads use the ring instead
+                 st === 'error' ? 'error' : '', m.action ? 'action' : ''].join(' ');
+    let detail = esc(m.detail || '');
+    if (downloading) {
+      const p = m.id in progress[kind] ? progress[kind][m.id] : -1;
+      detail = ringHtml(p) + `<span class="dl-text">${downloadText(p)}</span>`;
+    }
+    else if (st === 'loading') detail = 'Loading…';
+    else if (st === 'error') detail = "Couldn't load";
+    else if (m.installed === false) detail = DOWNLOAD_ICON + detail;
+    return `<div class="${cls}" data-kind="${kind}" data-id="${esc(m.id)}">
+              <span class="mark"></span><span class="name">${esc(m.label)}</span>
+              <span class="detail">${detail}</span></div>`;
+  }
+  function render() {
+    const stt = models.stt.items.map(m => row('stt', m)).join('')
+              + row('stt', { id: '__browse__', label: 'Browse for a model folder…', detail: '', action: true });
+    const llmItems = [{ id: '', label: 'Off', detail: 'Paste exactly what you say' }, ...models.llm.items];
+    let llm = llmItems.map(m => row('llm', m)).join('');
+    if (!models.llm.items.length)
+      llm += '<div class="empty">No local LLMs found. Install Ollama or LM Studio and pull a model — it will show up here.</div>';
+    document.getElementById('stt').innerHTML = stt;
+    document.getElementById('llm').innerHTML = llm;
+    renderLabel();
+    if (body.classList.contains('expanded')) sizeToContent();
+  }
+  document.addEventListener('click', e => {
+    const it = e.target.closest('.item'); if (!it || !api) return;
+    const { kind, id } = it.dataset;
+    if (id === '__browse__') api.browse(kind);
+    else api.select(kind, id);
+  });
+
+  // ── hover to expand. api.resize() tells Python the island's footprint; it clips
+  //    the (fixed-size) window to it so the transparent area never blocks clicks
+  //    on apps behind — without resizing the window, which made the island blink. ──
+  function panelHeight() { return Math.min(panel.scrollHeight, 560); }
+  function sizeToContent() {
+    const h = panelHeight();
+    document.documentElement.style.setProperty('--eh', h + 'px');
+    if (api) api.resize(EW + 2 * M, h + 2 * M);
+  }
+  function expand() {
+    clearTimeout(shrinkTimer);
+    sizeToContent();                                   // grow the window first…
+    requestAnimationFrame(() => body.classList.add('expanded'));   // …then morph
+  }
+  function collapse() {
+    body.classList.remove('expanded');
+    shrinkTimer = setTimeout(() => {                   // shrink the window after the morph
+      if (api) api.resize(CW + 2 * M, CH + 2 * M);
+      if (leaving) disappear();
+    }, 520);
+  }
+  function disappear() {
+    body.classList.remove('expanded');
+    body.classList.add('away');
+    setTimeout(() => { if (api && leaving) api.done(); }, 300);
+  }
+  // Hover comes from Python (it polls the real cursor): Chromium fires bogus
+  // mouseleave events while the window is resized around the expanding island.
+  function setHover(on) {
+    if (on === hovering) return;
+    hovering = on;
+    if (on) {
+      clearTimeout(closeTimer);
+      if (!leaving) openTimer = setTimeout(expand, 50);
+    } else {
+      clearTimeout(openTimer);
+      closeTimer = setTimeout(collapse, 200);
+    }
+  }
+
+  new QWebChannel(qt.webChannelTransport, ch => { api = ch.objects.island; api.ready(); });
+  render();
+</script>
+</body>
+</html>
