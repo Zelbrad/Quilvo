@@ -1,5 +1,7 @@
 # Quilvo
 
+![Quilvo dictating: edge glow, then the text appears](demo/demo.gif)
+
 Local voice dictation for Windows. Press **Alt+PageDown** anywhere, speak, press it again — the text is typed into whatever field your cursor is in. Speech recognition runs on your own PC with [faster-whisper](https://github.com/SYSTRAN/faster-whisper); nothing you say leaves your computer.
 
 - **Works in any app:** browser, chat, editor, email.
