@@ -1,0 +1,48 @@
+# Build Quilvo.exe on Windows and attach Quilvo-<version>-win64.zip to a GitHub release.
+# Trigger: push a tag matching the version in flow.py, e.g.  git tag v1.1.0; git push origin v1.1.0
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Check tag matches __version__
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path flow.py -Pattern '^__version__ = "(.+)"').Matches[0].Groups[1].Value
+          if ("v$version" -ne "${{ github.ref_name }}") { throw "Tag ${{ github.ref_name }} does not match flow.py __version__ $version" }
+          "VERSION=$version" >> $env:GITHUB_ENV
+
+      # Create .venv-build with setup-python's interpreter so build.ps1 skips its own `py -3` step
+      - name: Install build dependencies
+        shell: pwsh
+        run: |
+          python -m venv .venv-build
+          .\.venv-build\Scripts\python.exe -m pip install --upgrade pip
+          .\.venv-build\Scripts\python.exe -m pip install -r requirements-lock.txt
+
+      - name: Build
+        shell: pwsh
+        run: .\build.ps1
+
+      - name: Check the exe exists
+        shell: pwsh
+        run: if (-not (Test-Path dist\Quilvo\Quilvo.exe)) { throw "dist\Quilvo\Quilvo.exe missing" }
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/Quilvo-${{ env.VERSION }}-win64.zip
+          name: Quilvo ${{ env.VERSION }}
