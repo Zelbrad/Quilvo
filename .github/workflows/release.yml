@@ -11,6 +11,8 @@ on:
 
 permissions:
   contents: write
+  id-token: write        # build attestation
+  attestations: write
 
 jobs:
   build:
@@ -57,8 +59,33 @@ jobs:
           path: dist/Quilvo/                 # GitHub zips artifacts itself; avoids a zip inside a zip
           retention-days: 14
 
+      # Runs on dev too, so the script is tested before a release needs it
+      - name: Checksum
+        shell: pwsh
+        run: |
+          $zip = "Quilvo-$env:VERSION-win64.zip"
+          $hash = (Get-FileHash "dist\$zip" -Algorithm SHA256).Hash.ToLower()
+          @"
+          ### Verify the download
+          SHA-256 of ``$zip``:
+          ``````
+          $hash
+          ``````
+          Check it in PowerShell with ``Get-FileHash $zip``, or confirm it was built from this repo with ``gh attestation verify $zip -R ${{ github.repository }}``.
+          "@ | Set-Content dist\release-body.md -Encoding utf8
+          Get-Content dist\release-body.md
+
+      # Proves the zip was built by this workflow from this repo (the exe isn't code-signed)
+      - uses: actions/attest-build-provenance@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          subject-path: dist/Quilvo-${{ env.VERSION }}-win64.zip
+
+      # The checksum section goes first, then GitHub's generated "What's changed" (merged PRs)
       - uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: dist/Quilvo-${{ env.VERSION }}-win64.zip
           name: Quilvo ${{ env.VERSION }}
+          body_path: dist/release-body.md
+          generate_release_notes: true
