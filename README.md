@@ -24,7 +24,7 @@ Requirements: Windows 10/11 (64-bit) and a microphone. No GPU needed; transcript
 
 | Action | How |
 |---|---|
-| Start dictating | **Alt+PageDown** |
+| Start dictating | **Alt+PageDown** ([changeable](#change-the-hotkey)) |
 | Stop and insert the text | **Alt+PageDown** again |
 | Cancel | **Esc** |
 | Change languages or models | Hover the island at the top of the screen while dictating |
@@ -51,6 +51,16 @@ Hover the island → **Language → Change** and tick the languages you speak. Q
 
 Accuracy varies by language. `small` is very good for widely spoken languages like English, Spanish, French, German, Portuguese, Italian, Chinese or Japanese. For less common languages, try `medium` or `large-v3-turbo`.
 
+### Change the hotkey
+
+Right-click the tray icon → **Open settings**, change the `"hotkey"` line, save, then tray → **Restart Quilvo**.
+
+```json
+"hotkey": "<ctrl>+<shift>+d"
+```
+
+Special keys go in angle brackets (`<alt>`, `<ctrl>`, `<shift>`, `<f9>`, `<page_down>`); letters and digits don't. If the hotkey isn't valid, Quilvo falls back to Alt+PageDown and notes it in the log.
+
 ### Text cleanup (optional)
 
 With a local LLM running in Ollama or LM Studio, pick it under **Text cleanup** and Quilvo will tidy punctuation and remove filler words ("um", "uh") before pasting. It's off by default: it adds a delay and can reword sentences. Quilvo starts Ollama in the background if it's installed but not running.
@@ -70,7 +80,7 @@ pip install -r requirements.txt
 pyw flow.py            # or double-click Quilvo.bat
 ```
 
-Advanced options (hotkey, languages, visual style) are constants at the top of `flow.py`.
+Advanced options (default hotkey, visual style) are constants at the top of `flow.py`.
 
 ## Build the release
 

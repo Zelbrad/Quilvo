@@ -16,7 +16,7 @@ os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 # Plain HTTP instead of Hugging Face's Xet transfer: measured 78 MB in 2.3 s vs 54 s,
 # and it writes the file as it goes, which is what the island's progress ring reads.
 os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
-import sys, time, json, logging, threading
+import sys, time, json, logging, threading, subprocess
 from logging.handlers import RotatingFileHandler
 import numpy as np
 import requests
@@ -36,8 +36,8 @@ from PySide6.QtWebChannel import QWebChannel
 import models
 
 # ── Config ──────────────────────────────────────────────
-# WHISPER_MODEL / LLM_MODEL / CLEANUP are first-run defaults; after that the
-# models picked in the island are remembered in settings.json.
+# HOTKEY / WHISPER_MODEL / LLM_MODEL / CLEANUP are first-run defaults; after that
+# settings.json wins (models picked in the island; hotkey edited by hand).
 HOTKEY        = "<alt>+<page_down>"     # pynput format
 LLM_MODEL     = "llama3.1:8b"
 KEEP_ALIVE    = "30m"
@@ -383,7 +383,7 @@ def default_languages():
 
 
 def load_settings():
-    s = {"stt": WHISPER_MODEL, "stt_paths": [],
+    s = {"hotkey": HOTKEY, "stt": WHISPER_MODEL, "stt_paths": [],
          "llm": f"ollama:{LLM_MODEL}" if CLEANUP else ""}
     existed = os.path.exists(SETTINGS_PATH) or os.path.exists(LEGACY_SETTINGS)
     if not os.path.exists(SETTINGS_PATH) and os.path.exists(LEGACY_SETTINGS):
@@ -399,6 +399,23 @@ def load_settings():
     if "languages" not in s:          # [] = detect any language
         s["languages"] = ["en", "es"] if existed else default_languages()   # 1.0 was en + es
     return s
+
+
+def valid_hotkey(hk):
+    """The hotkey from settings.json, or the default if it isn't valid pynput syntax."""
+    try:
+        if isinstance(hk, str) and keyboard.HotKey.parse(hk):
+            return hk
+    except ValueError:
+        pass
+    log.warning("invalid hotkey %r in settings.json; using %s", hk, HOTKEY)
+    return HOTKEY
+
+
+def hotkey_label(hk):
+    """'<ctrl>+<shift>+d' -> 'Ctrl+Shift+D', for the tray tooltip and messages."""
+    return "+".join(p.strip("<>").replace("_", " ").title().replace(" ", "") if len(p) > 1 else p.upper()
+                    for p in hk.split("+"))
 
 
 def save_settings(s):
@@ -453,6 +470,8 @@ class FlowApp:
         self._stop = threading.Event()      # stop recording (hotkey again)
         self._cancel = threading.Event()    # discard (Esc)
         self.settings = load_settings()
+        self.hotkey = valid_hotkey(self.settings["hotkey"])
+        self.restart = False                # tray "Restart Quilvo": relaunch after quitting
         self.catalog = {"stt": [], "llm": []}
         self.languages = models.whisper_languages()
         self.stt = None
@@ -466,27 +485,40 @@ class FlowApp:
         self._spawn(self._load_lang_detector)
         self._spawn(self._refresh_catalog)
         # global hotkey + Esc listeners
-        self._hotkeys = keyboard.GlobalHotKeys({HOTKEY: self.bridge.trigger.emit})
+        self._hotkeys = keyboard.GlobalHotKeys({self.hotkey: self.bridge.trigger.emit})
         self._hotkeys.start()
         keyboard.Listener(on_press=self._on_key, daemon=True).start()
 
     def _build_tray(self):
         self.tray = QSystemTrayIcon(QIcon(ICON_PATH))
-        self.tray.setToolTip(f"Quilvo {__version__} — Alt+PageDown to dictate")
+        self.tray.setToolTip(f"Quilvo {__version__} — {hotkey_label(self.hotkey)} to dictate")
         self.menu = QMenu()                       # keep refs so they aren't GC'd
         self.autostart_act = QAction("Start with Windows", self.menu, checkable=True)
         self.autostart_act.setChecked(autostart_enabled())
         self.autostart_act.toggled.connect(set_autostart)
+        self.settings_act = QAction("Open settings", self.menu)
+        self.settings_act.triggered.connect(self._open_settings)
         self.logs_act = QAction("Open log folder", self.menu)
         self.logs_act.triggered.connect(lambda: os.startfile(DATA_DIR))
+        self.restart_act = QAction("Restart Quilvo", self.menu)
+        self.restart_act.triggered.connect(self._restart)
         self.quit_act = QAction("Quit Quilvo", self.menu)
         self.quit_act.triggered.connect(lambda: QApplication.quit())
-        self.menu.addActions([self.autostart_act, self.logs_act])
+        self.menu.addActions([self.autostart_act, self.settings_act, self.logs_act])
         self.menu.addSeparator()
-        self.menu.addAction(self.quit_act)
+        self.menu.addActions([self.restart_act, self.quit_act])
         self.tray.setContextMenu(self.menu)
         self.tray.activated.connect(self._on_tray_click)
         self.tray.show()
+
+    def _open_settings(self):
+        # Notepad, not os.startfile: .json often has no app associated
+        save_settings(self.settings)                # make sure the file exists
+        subprocess.Popen(["notepad.exe", SETTINGS_PATH])
+
+    def _restart(self):
+        self.restart = True                         # relaunched in __main__ once the lock is free
+        QApplication.quit()
 
     def _on_tray_click(self, reason):
         # left-click also opens the menu (handy if right-click is finicky)
@@ -566,7 +598,7 @@ class FlowApp:
         self.bridge.model_status.emit("stt", model_id, "ready")
         log.info("speech model ready: %s", model_id)
         if first_download:
-            self.bridge.info.emit("Quilvo is ready — press Alt+PageDown anywhere to dictate.")
+            self.bridge.info.emit(f"Quilvo is ready — press {hotkey_label(self.hotkey)} anywhere to dictate.")
         self._refresh_catalog()                     # a download is now "installed"
 
     def _report_download(self, model_id, downloading):
@@ -797,4 +829,9 @@ if __name__ == "__main__":
     flow = FlowApp()
     if "--selftest" in sys.argv:
         flow.selftest()
-    sys.exit(app.exec())
+    code = app.exec()
+    if flow.restart:
+        instance_lock.unlock()
+        # PyInstaller: start the new copy as its own app, not a child of this one
+        subprocess.Popen(_launch_command(), env={**os.environ, "PYINSTALLER_RESET_ENVIRONMENT": "1"})
+    sys.exit(code)
