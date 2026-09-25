@@ -10,6 +10,22 @@ Local voice dictation for Windows. Press **Alt+PageDown** anywhere, speak, press
 - **Model picker:** a "dynamic island" at the top of the screen. Hover it to switch speech models or turn on optional text cleanup with a local LLM ([Ollama](https://ollama.com) or [LM Studio](https://lmstudio.ai)).
 - **No models bundled:** the default speech model downloads automatically on first run. Others download when you pick them.
 
+## How it compares
+
+| | Quilvo | Wispr Flow | Windows voice typing (Win+H) |
+|---|---|---|---|
+| Price | Free | Free up to 2,000 words/week, then $12–15/month | Free, built in |
+| Where your voice is processed | **On your PC** | Wispr's cloud | Microsoft's cloud |
+| Works offline | **Yes** (after the model downloads) | No | No |
+| Account needed | No | Yes | No |
+| Languages | About 100 | 100+ | 43 |
+| Mix languages in one sentence | English + Spanish | Yes | No (one language at a time) |
+| Text cleanup | Optional, with a local LLM | Built in (cloud AI) | Automatic punctuation |
+| Platforms | Windows | Windows, Mac, iOS, Android | Windows |
+| Open source | **Yes** (MIT) | No | No |
+
+<sub>Wispr Flow and Windows details from their own sites, September 2026.</sub>
+
 ## Install
 
 1. Download `Quilvo-<version>-win64.zip` from [Releases](../../releases) and unzip it to a folder you'll keep, like `Documents\Quilvo`.
